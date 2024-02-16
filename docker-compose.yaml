@@ -11,6 +11,8 @@ services:
       - 8000:8000
     volumes:
       - ./.bin/:/root/
+    networks:
+      - gdkNetwork
     env_file:
       - .env
 
@@ -27,3 +29,6 @@ services:
       - ./.bin/:/root/
     env_file:
       - .env
+
+networks:
+  gdkNetwork:

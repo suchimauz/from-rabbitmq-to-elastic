@@ -1,6 +1,8 @@
 package config
 
 import (
+	"errors"
+	"fmt"
 	"time"
 
 	"github.com/joho/godotenv"
@@ -8,13 +10,28 @@ import (
 )
 
 const (
-	appName = "golang_template"
+	appName = "from-rabbitmq-to-elastic"
 )
 
 type (
 	Config struct {
-		timezone string `envconfig:"app_timezone" default:"UTC"` // String timezone format
-		Timezone *time.Location
+		timezoneEnv       string `envconfig:"app_timezone" default:"UTC"` // String timezone format
+		Timezone          *time.Location
+		ConsumerQueueName string `envconfig:"app_rabbitmq_consumer_queue_name"`
+		Elastic           ElasticConfig
+		RabbitMq          RabbitMqConfig
+	}
+	ElasticConfig struct {
+		Hosts []string `envconfig:"es_hosts" split_words:"true"`
+	}
+	RabbitMqConfig struct {
+		Host     string `envconfig:"rabbitmq_host"`
+		Port     string `envconfig:"rabbitmq_port"`
+		User     string `envconfig:"rabbitmq_username"`
+		Password string `envconfig:"rabbitmq_password"`
+		Vhost    string `envconfig:"rabbitmq_vhost"`
+
+		AmqpUri string
 	}
 )
 
@@ -30,7 +47,7 @@ func NewConfig() (*Config, error) {
 	}
 
 	// Parse timezone from cfg.tz or return err
-	cfg.Timezone, err = time.LoadLocation(cfg.timezone)
+	cfg.Timezone, err = time.LoadLocation(cfg.timezoneEnv)
 	if err != nil {
 		return nil, err
 	}
@@ -43,6 +60,36 @@ func NewConfig() (*Config, error) {
 }
 
 func (cfg *Config) validate() error {
-	// pass some validations here
+	if cfg.ConsumerQueueName == "" {
+		return errors.New("APP_RABBITMQ_CONSUMER_QUEUE_NAME is required")
+	}
+	if len(cfg.Elastic.Hosts) == 0 {
+		return errors.New("ES_HOSTS is required")
+	}
+
+	if err := cfg.RabbitMq.validateAndSetUri(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// Private func for set all FileStorageConfig fields required
+func (rmqcfg *RabbitMqConfig) validateAndSetUri() error {
+	if rmqcfg.Host == "" {
+		return errors.New("RABBITMQ_HOST is required")
+	}
+	if rmqcfg.Port == "" {
+		return errors.New("RABBITMQ_PORT is required")
+	}
+	if rmqcfg.User == "" {
+		return errors.New("RABBITMQ_USERNAME is required")
+	}
+	if rmqcfg.Password == "" {
+		return errors.New("RABBITMQ_PASSWORD is required")
+	}
+
+	rmqcfg.AmqpUri = fmt.Sprintf("amqp://%s:%s@%s:%s/%s", rmqcfg.User, rmqcfg.Password, rmqcfg.Host, rmqcfg.Port, rmqcfg.Vhost)
+
 	return nil
 }

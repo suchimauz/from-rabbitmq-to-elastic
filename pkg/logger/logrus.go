@@ -35,3 +35,11 @@ func Error(msg ...interface{}) {
 func Errorf(format string, args ...interface{}) {
 	logrus.Errorf(format, args...)
 }
+
+func Panic(msg ...interface{}) {
+	logrus.Panic(msg...)
+}
+
+func Panicf(format string, args ...interface{}) {
+	logrus.Panicf(format, args...)
+}
