@@ -29,11 +29,7 @@ type LogMessage struct {
 func Run() {
 	// Initialize config
 	cfg, err := config.NewConfig()
-	if err != nil {
-		logger.Errorf("[ENV] %s", err.Error())
-
-		return
-	}
+	failOnError(err, "Failed parse Environment")
 
 	retryBackoff := backoff.NewExponentialBackOff()
 
@@ -65,11 +61,7 @@ func Run() {
 		FlushBytes:    cfg.Elastic.FlushSize * 1000,                           // The flush threshold in bytes
 		FlushInterval: time.Duration(cfg.Elastic.FlushInterval) * time.Second, // The periodic flush interval
 	})
-	if err != nil {
-		logger.Errorf("Error creating the indexer: %s", err)
-
-		return
-	}
+	failOnError(err, "Failed creating Elasticsearch Bulk Indexer")
 
 	rmqConn, err := amqp.Dial(cfg.RabbitMq.AmqpUri)
 	failOnError(err, "Failed to connect to RabbitMQ")
