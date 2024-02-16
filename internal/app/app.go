@@ -93,7 +93,7 @@ func Run() {
 
 			dur := time.Since(start)
 			if esBulkIndexerStats.NumFailed > 0 {
-				logger.Infof(
+				logger.Errorf(
 					"Indexed [%s] documents with [%s] errors in %s (%s docs/sec)",
 					humanize.Comma(int64(esBulkIndexerStats.NumFlushed)),
 					humanize.Comma(int64(esBulkIndexerStats.NumFailed)),
