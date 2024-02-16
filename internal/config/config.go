@@ -22,7 +22,10 @@ type (
 		RabbitMq          RabbitMqConfig
 	}
 	ElasticConfig struct {
-		Hosts []string `envconfig:"es_hosts" split_words:"true"`
+		Hosts         []string `envconfig:"es_hosts" split_words:"true"`
+		NumWorkers    int      `envconfig:"es_num_workers" default:"2"`
+		FlushSize     int      `envconfig:"es_flush_size" default:"2048"`   // 2 mb (2048 KB)
+		FlushInterval int      `envconfig:"es_flush_interval" default:"30"` // 30 seconds
 	}
 	RabbitMqConfig struct {
 		Host     string `envconfig:"rabbitmq_host"`

@@ -12,7 +12,10 @@ require (
 )
 
 require (
+	github.com/alecthomas/units v0.0.0-20231202071711-9a357b53e9c9
+	github.com/cenkalti/backoff/v4 v4.2.1
 	github.com/davecgh/go-spew v1.1.1
+	github.com/dustin/go-humanize v1.0.1
 	github.com/joho/godotenv v1.4.0 // indirect
 	github.com/kelseyhightower/envconfig v1.4.0 // indirect
 	golang.org/x/sys v0.0.0-20220915200043-7b5979e65e41 // indirect
