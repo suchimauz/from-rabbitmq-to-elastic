@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"runtime"
 	"time"
 
 	"github.com/joho/godotenv"
@@ -18,12 +19,15 @@ type (
 		timezoneEnv       string `envconfig:"app_timezone" default:"UTC"` // String timezone format
 		Timezone          *time.Location
 		ConsumerQueueName string `envconfig:"app_rabbitmq_consumer_queue_name"`
+		ConsumersCount    int    `envconfig:"app_rabbitmq_consumers_count" default:"1"`
+		ExcludeRules      string `envconfig:"app_logs_exclude_rules" default:"[]"`
 		Elastic           ElasticConfig
 		RabbitMq          RabbitMqConfig
+		NumCpu            int
 	}
 	ElasticConfig struct {
 		Hosts         []string `envconfig:"es_hosts" split_words:"true"`
-		NumWorkers    int      `envconfig:"es_num_workers" default:"2"`
+		NumWorkers    int      `envconfig:"es_num_workers" default:"1"`
 		FlushSize     int      `envconfig:"es_flush_size" default:"2048"`   // 2 mb (2048 KB)
 		FlushInterval int      `envconfig:"es_flush_interval" default:"30"` // 30 seconds
 	}
@@ -48,6 +52,8 @@ func NewConfig() (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	cfg.NumCpu = maxParallelism()
 
 	// Parse timezone from cfg.tz or return err
 	cfg.Timezone, err = time.LoadLocation(cfg.timezoneEnv)
@@ -95,4 +101,13 @@ func (rmqcfg *RabbitMqConfig) validateAndSetUri() error {
 	rmqcfg.AmqpUri = fmt.Sprintf("amqp://%s:%s@%s:%s/%s", rmqcfg.User, rmqcfg.Password, rmqcfg.Host, rmqcfg.Port, rmqcfg.Vhost)
 
 	return nil
+}
+
+func maxParallelism() int {
+	maxProcs := runtime.GOMAXPROCS(0)
+	numCPU := runtime.NumCPU()
+	if maxProcs < numCPU {
+		return maxProcs
+	}
+	return numCPU
 }

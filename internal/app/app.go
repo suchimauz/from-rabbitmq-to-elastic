@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
+	"regexp"
 	"strings"
 	"syscall"
 	"time"
@@ -17,19 +19,24 @@ import (
 	"github.com/elastic/go-elasticsearch/v7/esutil"
 	"github.com/suchimauz/golang-project-template/internal/config"
 	"github.com/suchimauz/golang-project-template/pkg/logger"
+	"github.com/tidwall/gjson"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
-type LogMessage struct {
-	Index string `json:"index"`
-	Log   string `json:"log"`
-}
+type (
+	LogMessage struct {
+		Index string `json:"index"`
+		Log   string `json:"log"`
+	}
+)
 
 func Run() {
 	// Initialize config
 	cfg, err := config.NewConfig()
 	failOnError(err, "Failed parse Environment")
+
+	checkExcludeFunc := getExcludeRulesFunc(cfg)
 
 	retryBackoff := backoff.NewExponentialBackOff()
 
@@ -71,20 +78,26 @@ func Run() {
 	failOnError(err, "Failed to open a channel")
 	defer rmqCh.Close()
 
-	msgs, err := rmqCh.Consume(
-		cfg.ConsumerQueueName, // queue
-		"",                    // consumer
-		true,                  // auto-ack
-		false,                 // exclusive
-		false,                 // no-local
-		false,                 // no-wait
-		nil,                   // args
-	)
-	failOnError(err, "Failed to register a consumer")
+	var consumeChannels []<-chan amqp.Delivery
+	for i := 0; i < cfg.ConsumersCount; i++ {
+		msgs, err := rmqCh.Consume(
+			cfg.ConsumerQueueName,           // queue
+			"from-rmq-to-es-"+fmt.Sprint(i), // consumer
+			true,                            // auto-ack
+			false,                           // exclusive
+			false,                           // no-local
+			false,                           // no-wait
+			nil,                             // args
+		)
+		failOnError(err, "Failed to register a consumer")
+
+		consumeChannels = append(consumeChannels, msgs)
+	}
 
 	ticker := time.NewTicker(60 * time.Second)
 
 	start := time.Now().UTC()
+	var excludedCounter uint64 = 0
 
 	go func() {
 		for range ticker.C {
@@ -92,58 +105,56 @@ func Run() {
 			log.Println(strings.Repeat("▔", 65))
 
 			dur := time.Since(start)
-			if esBulkIndexerStats.NumFailed > 0 {
-				logger.Errorf(
-					"Indexed [%s] documents with [%s] errors in %s (%s docs/sec)",
-					humanize.Comma(int64(esBulkIndexerStats.NumFlushed)),
-					humanize.Comma(int64(esBulkIndexerStats.NumFailed)),
-					dur.Truncate(time.Millisecond),
-					humanize.Comma(int64(1000.0/float64(dur/time.Millisecond)*float64(esBulkIndexerStats.NumFlushed))),
-				)
-			} else {
-				logger.Infof(
-					"Sucessfuly indexed [%s] documents in %s (%s docs/sec)",
-					humanize.Comma(int64(esBulkIndexerStats.NumFlushed)),
-					dur.Truncate(time.Millisecond),
-					humanize.Comma(int64(1000.0/float64(dur/time.Millisecond)*float64(esBulkIndexerStats.NumFlushed))),
-				)
-			}
-		}
-	}()
-
-	go func() {
-		for d := range msgs {
-			var logMsg LogMessage
-			json.Unmarshal(d.Body, &logMsg)
-
-			// >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
-			//
-			// Add an item to the BulkIndexer
-			//
-			err = esBulkIndexer.Add(
-				context.Background(),
-				esutil.BulkIndexerItem{
-					Action: "index",
-					Index:  logMsg.Index,
-					// Body is an `io.Reader` with the payload
-					Body: bytes.NewReader([]byte(logMsg.Log)),
-
-					// OnFailure is called for each failed operation
-					OnFailure: func(ctx context.Context, item esutil.BulkIndexerItem, res esutil.BulkIndexerResponseItem, err error) {
-						if err != nil {
-							logger.Errorf("ERROR: %s", err)
-						} else {
-							logger.Errorf("ERROR: %s: %s", res.Error.Type, res.Error.Reason)
-						}
-					},
-				},
+			logger.Infof(
+				"Indexed [%s] documents with [%s] errors in %s (%s docs/sec). Excluded [%s] documents",
+				humanize.Comma(int64(esBulkIndexerStats.NumFlushed)),
+				humanize.Comma(int64(esBulkIndexerStats.NumFailed)),
+				dur.Truncate(time.Millisecond),
+				humanize.Comma(int64(1000.0/float64(dur/time.Millisecond)*float64(esBulkIndexerStats.NumFlushed))),
+				humanize.Comma(int64(excludedCounter)),
 			)
-			if err != nil {
-				logger.Errorf("Unexpected error: %s", err)
-			}
-			// <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
 		}
 	}()
+
+	for i, msgs := range consumeChannels {
+		go func(workerNum int, _msgs <-chan amqp.Delivery) {
+			for d := range _msgs {
+				var logMsg LogMessage
+				json.Unmarshal(d.Body, &logMsg)
+
+				if checkExcludeFunc(logMsg.Log) {
+					excludedCounter++
+				} else {
+					// >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+					//
+					// Add an item to the BulkIndexer
+					//
+					err = esBulkIndexer.Add(
+						context.Background(),
+						esutil.BulkIndexerItem{
+							Action: "index",
+							Index:  logMsg.Index,
+							// Body is an `io.Reader` with the payload
+							Body: bytes.NewReader([]byte(logMsg.Log)),
+
+							// OnFailure is called for each failed operation
+							OnFailure: func(ctx context.Context, item esutil.BulkIndexerItem, res esutil.BulkIndexerResponseItem, err error) {
+								if err != nil {
+									logger.Errorf("[%s worker] ERROR: %s", fmt.Sprint(workerNum), err)
+								} else {
+									logger.Errorf("[%s worker] ERROR: %s: %s", fmt.Sprint(workerNum), res.Error.Type, res.Error.Reason)
+								}
+							},
+						},
+					)
+					if err != nil {
+						logger.Errorf("[%s worker] Unexpected error: %s", fmt.Sprint(workerNum), err)
+					}
+					// <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+				}
+			}
+		}(i, msgs)
+	}
 
 	logger.Info("RabbitMQ waiting messages...")
 
@@ -170,5 +181,59 @@ func Run() {
 func failOnError(err error, msg string) {
 	if err != nil {
 		logger.Panicf("%s: %s", msg, err)
+	}
+}
+
+func getExcludeRulesFunc(cfg *config.Config) func(string) bool {
+	var rules []map[string]string
+
+	json.Unmarshal([]byte(cfg.ExcludeRules), &rules)
+
+	var predsArr []func(string) bool
+
+	for _, rule := range rules {
+		predsArr = append(predsArr, func(log string) bool {
+			var pred bool
+			pred = false
+
+			for key, value := range rule {
+				if key == "d" {
+					p := gjson.Get(log, fmt.Sprintf("[@this].#(d %s)", value))
+					pred = p.String() != ""
+				} else if key == "sql" {
+					p := gjson.Get(log, "sql")
+					if p.String() != "" {
+						re := regexp.MustCompile(strings.ReplaceAll(value, "regex_not:", ""))
+
+						lowerP := strings.ToLower(p.String())
+						pred = !re.MatchString(lowerP)
+					}
+				} else {
+					p := gjson.Get(log, key)
+
+					stringified := strings.Replace(p.String(), ":", "", 1)
+
+					pred = stringified == value
+				}
+
+				if !pred {
+					break
+				}
+			}
+
+			return pred
+		})
+	}
+
+	return func(log string) bool {
+		if len(predsArr) > 0 {
+			for _, predFunc := range predsArr {
+				if predFunc(log) {
+					return true
+				}
+			}
+		}
+
+		return false
 	}
 }
