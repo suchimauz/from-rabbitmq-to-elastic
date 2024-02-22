@@ -20,7 +20,6 @@ type (
 		Timezone          *time.Location
 		ConsumerQueueName string `envconfig:"app_rabbitmq_consumer_queue_name"`
 		ConsumersCount    int    `envconfig:"app_rabbitmq_consumers_count" default:"1"`
-		ExcludeRules      string `envconfig:"app_logs_exclude_rules" default:"[]"`
 		Elastic           ElasticConfig
 		RabbitMq          RabbitMqConfig
 		NumCpu            int
